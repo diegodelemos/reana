@@ -10,8 +10,8 @@
 
 import datetime
 import os
-import sys
 import subprocess
+import sys
 
 import click
 
@@ -21,9 +21,12 @@ from reana.config import (
     REPO_LIST_ALL,
     REPO_LIST_SHARED,
 )
+
 from reana.reana_dev.utils import (
+    bump_component_version,
     display_message,
     fetch_latest_pypi_version,
+    get_current_component_version_from_source_files,
     get_srcdir,
     run_command,
     select_components,
@@ -82,6 +85,50 @@ def get_current_commit(srcdir):
         .decode()
         .rstrip("\r\n")
     )
+
+
+def git_is_current_version_tagged(component):
+    """Determine whether the current version in source code is present as a git tag."""
+    tags_history = run_command(
+        "git tag --list", component, display=False, return_output=True
+    )
+    current_version = get_current_component_version_from_source_files(component)
+    return current_version in tags_history if tags_history else False
+
+
+def git_create_release_commit(component):
+    """Create a release commit for the given component."""
+    if "release:" in get_current_commit(get_srcdir(component)):
+        display_message("Nothing to do, last commit is a release commit.", component)
+        return False
+
+    current_version = get_current_component_version_from_source_files(component)
+    if not current_version:
+        display_message(
+            f"Version cannot be autodiscovered from source files.", component
+        )
+        sys.exit(1)
+    elif not git_is_current_version_tagged(component):
+        display_message(
+            f"Current version ({current_version}) "
+            "not present as a git tag, plese release it and add a tag.",
+            component,
+        )
+        sys.exit(1)
+
+    next_version, modified_files = bump_component_version(component, current_version,)
+
+    if (
+        run_command(
+            "git branch --show-current", component, display=False, return_output=True,
+        )
+        == "master"
+    ):
+        run_command(f"git checkout -b release-{next_version}", component)
+
+    run_command(f"git add {' '.join(modified_files)}", component)
+    run_command(f"git commit -m 'release: {next_version}'", component)
+    return True
 
 
 @click.group()
@@ -818,6 +865,40 @@ def git_upgrade_shared_modules(
     ctx.invoke(git_diff, component=component)
     if push:
         _push_to_origin(components)
+
+
+@click.option(
+    "--component",
+    "-c",
+    multiple=True,
+    default=["CLUSTER"],
+    help="Which components? [shortname|name|.|CLUSTER|ALL]",
+)
+@git_commands.command(name="git-create-release-commit")
+def git_create_release_commit_command(component):  # noqa: D301
+    """Create a release commit for the specified components.
+
+    \b
+    :param components: The option ``component`` can be repeated. The value may
+                       consist of:
+                         * (1) standard component name such as
+                               'reana-workflow-controller';
+                         * (2) short component name such as 'r-w-controller';
+                         * (3) special value '.' indicating component of the
+                               current working directory;
+                         * (4) special value 'CLUSTER' that will expand to
+                               cover all REANA cluster components [default];
+                         * (5) special value 'CLIENT' that will expand to
+                               cover all REANA client components;
+                         * (6) special value 'DEMO' that will expand
+                               to include several runable REANA demo examples;
+                         * (7) special value 'ALL' that will expand to include
+                               all REANA repositories.
+    :type component: str
+    """
+    for comp in select_components(component):
+        if git_create_release_commit(comp):
+            display_message("Release commit created.", comp)
 
 
 git_commands_list = list(git_commands.commands.values())
