@@ -1,4 +1,4 @@
-const CHART_INDEX_URL = "https://reanahub.github.io/reana/index.yaml";
+const CHART_INDEX_URL = "https://diegodelemos.me/reana/index.yaml";
 
 function fillTable(releases) {
   tableBody = document.getElementById("tableBody");
